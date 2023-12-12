@@ -1,0 +1,42 @@
+#cloud-config
+package_update: true
+packages:
+  - procps
+  - net-tools
+  - iputils
+  - wget
+
+users:
+  - name: dotnetapp
+    passwd: "dotnetapp"
+    shell: /bin/bash
+  - name: deploy
+    passwd: "123QWErty"
+    groups: wheel
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-rsa
+write_files:
+  - path: /etc/pki/ca-trust/source/anchors/CA.crt
+    content: |
+      -----BEGIN CERTIFICATE-----
+
+      -----END CERTIFICATE-----
+
+  - path: /etc/yum.repos.d/project-nexus.repo
+    content: |
+      [project_nexus]
+      name=project Nexus Repository
+      baseurl=https://nexus.project.net/repository/rpm-hosted-project/
+      enabled=1
+      gpgcheck=0
+runcmd:
+  - export HOME=/root
+  - cd /tmp && wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh
+  - chmod +x /tmp/dotnet-install.sh && cd /tmp
+  - ./dotnet-install.sh -runtime dotnet --version 6.0.1 -i /usr/local/dotnet
+  - ./dotnet-install.sh -runtime aspnetcore --version 6.0.1 -i /usr/local/dotnet
+  - passwd -d deploy
+  - passwd -d dotnetapp
+  - echo "export PATH=$PATH:/usr/local/dotnet" >> /root/.bashrc
+  - echo "export PATH=$PATH:/usr/local/dotnet" >> /home/dotnetapp/.bashrc

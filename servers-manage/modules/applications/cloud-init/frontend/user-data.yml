@@ -1,0 +1,35 @@
+#cloud-config
+package_update: true
+packages:
+  - nginx-1:1.18.0-8.el7.3
+  - procps
+  - net-tools
+  - iputils
+  - wget
+
+users:
+  - name: deploy
+    passwd: "123QWErty"
+    groups: wheel
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-rsa
+write_files:
+  - path: /etc/pki/ca-trust/source/anchors/CA.crt
+    content: |
+      -----BEGIN CERTIFICATE-----
+
+      -----END CERTIFICATE-----
+
+  - path: /etc/yum.repos.d/project-nexus.repo
+    content: |
+      [project_nexus]
+      name=project Nexus Repository
+      baseurl=https://nexus.project.net/repository/rpm-hosted-project/
+      enabled=1
+      gpgcheck=0
+runcmd:
+    # required for nginx proxy
+  - setsebool -P httpd_can_network_connect 1
+  - systemctl enable --now nginx
+  - passwd -d deploy

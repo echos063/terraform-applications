@@ -1,0 +1,158 @@
+# Updating and installing packages
+- name: Environment for users installing
+  hosts:
+    - postgres-app
+  gather_facts: no
+  become: yes
+  become_user: root
+  tasks:
+    - name: Update servers
+      command: dnf makecache
+    - name: Install packages
+      package:
+        name:
+          - vim
+          - tree
+          - bash-completion
+          - nginx-1:1.18.0-8.el7.3
+          - telnet
+          - python3-psycopg2
+          - rsync
+        state: present
+    - name: Check file bash-completion in /home/deploy/.bashrc
+      shell: cat /home/deploy/.bashrc | grep -q "Auto-completion"
+      ignore_errors: true
+      register: grep_result
+    - name: Check file bash-completion in /root/.bashrc
+      shell: cat /root/.bashrc | grep -q "Auto-completion"
+      ignore_errors: true
+      register: grep_result
+    - name: Read bash-completion file
+      slurp:
+        src: ../shared_files/bash-completion
+      delegate_to: localhost
+      become_user: ubuntu
+      register: bash_completion_contents
+    - name: Adding auto-completion into /home/deploy/.bashrc
+      lineinfile:
+        path: /home/deploy/.bashrc
+        line: "{{ bash_completion_contents['content'] | b64decode }}"
+      when: grep_result.rc !=0
+    - name: Adding auto-completion into /root/.bashrc
+      lineinfile:
+        path: /root/.bashrc
+        line: "{{ bash_completion_contents['content'] | b64decode }}"
+      when: grep_result.rc !=0
+
+    - name: Create log directory for PostgreSQL
+      file:
+        path: /var/log/postgresql
+        owner: postgres
+        group: postgres
+        mode: '0755'
+        state: directory
+
+    - name: Check if custom entry exists in pg_hba.conf
+      shell: grep -q 'host\s*backenduser\s*backenduser\s*all\s*password' /mnt/vdb/pgsql/data/pg_hba.conf
+      register: custom_entry_exists
+      changed_when: false
+      ignore_errors: true
+
+    - name: Add custom entry to pg_hba.conf
+      lineinfile:
+        path: /mnt/vdb/pgsql/data/pg_hba.conf
+        line: 'host backenduser  backenduser  all password'
+      when: custom_entry_exists.rc != 0
+
+    - name: Update PostgreSQL configuration for log directory and format
+      lineinfile:
+        path: /mnt/vdb/pgsql/data/postgresql.conf
+        regexp: '^#? *(log_directory|log_filename) *=.*'
+        line: |
+          log_directory = '/var/log/postgresql/'
+          log_filename = 'postgresql-%d-%m-%Y.log'
+          port = 'port = 5435'
+      when: ansible_postgresql_log_directory is defined and '/var/log/postgresql/' != ansible_postgresql_log_directory
+
+    - name: Update PostgreSQL log directory path
+      lineinfile:
+        path: /mnt/vdb/pgsql/data/postgresql.conf
+        regexp: '^#? *log_directory *=.*'
+        line: "log_directory = '/var/log/postgresql/'"
+
+    - name: Update PostgreSQL log filename format
+      lineinfile:
+        path: /mnt/vdb/pgsql/data/postgresql.conf
+        regexp: '^#? *log_filename *=.*'
+        line: "log_filename = '%d-%m-%Y-postgresql.log'"
+
+    - name: Update PostgreSQL port
+      lineinfile:
+        path: /mnt/vdb/pgsql/data/postgresql.conf
+        regexp: '^#? *port = 5432 *=.*'
+        line: "port = 5435"
+
+- name: Create PostgreSQL user and databases for Backend
+  hosts: 
+    - postgres-app
+  become: yes
+  become_user: postgres
+  vars:
+    postgres_user: backenduser
+    postgres_password: 'VeryStrongPassword'
+    databases:
+      - app1db
+      - app2db
+      - app3db
+      - app4db
+  tasks:
+    - name: Create backend databases
+      postgresql_db:
+        port: 5435
+        name: "{{ item }}"
+        state: present
+      loop: "{{ databases }}"
+
+    - name: Create backend user
+      postgresql_user:
+        db: "{{ item }}"
+        port: 5435
+        name: "{{ postgres_user }}"
+        password: "{{ postgres_password }}"
+        state: present
+      loop: "{{ databases }}"
+
+    - name: Set permissions for objects
+      postgresql_privs:
+        db: "{{ item }}"
+        port: 5435
+        password: "{{ postgres_password }}"
+        schema: public
+        objs: ALL_IN_SCHEMA
+        roles: "{{ postgres_user }}"
+        privs: "SELECT,INSERT,UPDATE,DELETE,CREATE,TRUNCATE"
+        state: present
+      loop: "{{ databases }}"
+
+    - name: Set connect permissions
+      postgresql_privs:
+        type: database
+        db: "{{ item }}"
+        port: 5435
+        roles: "{{ postgres_user }}"
+        privs: "CONNECT"
+        grant_option: false
+      loop: "{{ databases }}"
+
+- name: Restart PostgreSQL
+  hosts:
+    - postgres-app
+  gather_facts: no
+  become: yes
+  become_user: root
+  tasks:
+    - name: Reload PostgreSQL
+      systemd:
+        name: postgresql-14
+        state: restarted
+

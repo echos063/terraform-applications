@@ -1,0 +1,14 @@
+# Default ignored files
+.idea
+notes.txt
+servers-manage/.terraform
+servers-manage/.terraform.lock.hcl
+servers-manage/terraform.tfstate
+servers-manage/terraform.tfstate.backup
+servers-manage/ansible-manage/ansible-dev/artifacts*
+servers-manage/ansible-manage/ansible-stage/artifacts*
+servers-manage/ansible-manage/ansible-prod/artifacts*
+servers-manage/ansible-manage/ansible-dev/logs_from_vms/
+servers-manage/ansible-manage/ansible-stage/logs_from_vms/
+servers-manage/ansible-manage/ansible-prod/logs_from_vms/
+servers-manage/logs/

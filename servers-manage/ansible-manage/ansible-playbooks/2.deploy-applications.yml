@@ -1,0 +1,311 @@
+---
+- name: Get new artifact
+  hosts: localhost
+  gather_facts: no
+  become_user: ubuntu
+  tasks:
+    - name: Getting artifact from release
+      uri:
+        url: "https://gitlab-server.project.net/api/v4/projects/1/jobs/{{ job }}/artifacts"
+        headers:
+          PRIVATE-TOKEN: {{ PRIVATE_TOKEN }}
+        return_content: yes
+        method: GET
+      register: result
+    - name: Save artifact
+      copy:
+        content: "{{ result.content }}"
+        dest: "{{ lookup('env', 'PWD') }}/artifacts.zip"
+    - name: Unzip artifacts.zip
+      unarchive:
+        src: "{{ lookup('env', 'PWD') }}/artifacts.zip"
+        dest: "{{ lookup('env', 'PWD') }}"
+
+- name: Deploy backend
+  hosts: backend
+  gather_facts: no
+  become: yes
+  become_user: root
+  tasks:
+    - name: Update servers
+      command: dnf makecache
+    - name: Install packages
+      package:
+        name:
+          - vim
+          - tree
+          - bash-completion
+          - telnet
+          - rsync
+        state: present
+    - name: Check file bash-completion in /home/deploy/.bashrc
+      shell: cat /home/deploy/.bashrc | grep -q "Auto-completion"
+      ignore_errors: true
+      register: grep_result
+    - name: Check file bash-completion in /root/.bashrc
+      shell: cat /root/.bashrc | grep -q "Auto-completion"
+      ignore_errors: true
+      register: grep_result
+    - name: Read bash-completion file
+      slurp:
+        src: ../shared_files/bash-completion
+      delegate_to: localhost
+      become_user: ubuntu
+      register: bash_completion_contents
+    - name: Adding auto-completion into /home/deploy/.bashrc
+      lineinfile:
+        path: /home/deploy/.bashrc
+        line: "{{ bash_completion_contents['content'] | b64decode }}"
+      when: grep_result.rc !=0
+    - name: Adding auto-completion into /root/.bashrc
+      lineinfile:
+        path: /root/.bashrc
+        line: "{{ bash_completion_contents['content'] | b64decode }}"
+      when: grep_result.rc !=0
+
+    - name: Create application directories
+      block:
+        - name: Remove old service directories
+          command: "rm -rf /app/{{ item }}"
+          loop:
+            - app1
+            - app2
+            - app3
+            - app4
+
+        - name: Create subdirectories for services
+          file:
+            path: "/app"
+            state: directory
+
+        - name: Create subdirectories for services in dotnetapp's home directory
+          file:
+            path: "/home/dotnetapp/{{ item }}"
+            state: directory
+            owner: dotnetapp
+            group: dotnetapp
+            mode: '0755'
+          loop:
+            - ProjectName.app1
+            - ProjectName.app2
+            - ProjectName.app3
+            - ProjectName.app4
+      ignore_errors: yes
+
+    - name: Create /etc/project/projectname directory
+      file:
+        path: /etc/project/projectname
+        state: directory
+
+    - name: Copy service directories
+      copy:
+        src: "{{ lookup('env', 'PWD') }}/artifacts/{{ item }}"
+        dest: "/app"
+      loop:
+        - app1
+        - app2
+        - app3
+        - app4
+
+    - name: Change appsettings.json for services
+      block:
+        - name: Change appsettings.json for app1
+          replace:
+            path: "/app/app1/bin/appsettings.json"
+            regexp: '^{{ item.regexp }}$'
+            replace: '{{ item.replace }}'
+            backup: no
+          loop:
+            - { regexp: 'https://envdev-front.project.net",', replace: 'https://envprod-front.project.net' }
+            - { regexp: 'http://envdev-front.project.net', replace: 'http://envprod-front.project.net' }
+
+        - name: Change appsettings.Production.json for services
+          replace:
+            path: "/app/{{ item.item }}/bin/appsettings.Production.json"
+            regexp: "{{ item.regexp }}"
+            replace: "{{ item.replace }}"
+          loop:
+            - { item: app1, regexp: 'Password=password', replace: 'Password=postgres' }
+            - { item: app1, regexp: 'Host=app-postgres', replace: 'Host=envprod-db.project.net' }
+            - { item: app2, regexp: 'Password=password', replace: 'Password=postgres' }
+            - { item: app2, regexp: 'Host=app-postgres', replace: 'Host=envprod-db.project.net' }
+            - { item: app3, regexp: 'Password=password', replace: 'Password=postgres' }
+            - { item: app3, regexp: 'Host=app-postgres', replace: 'Host=envprod-db.project.net' }
+            - { item: app4, regexp: 'Password=password', replace: 'Password=postgres' }
+            - { item: app4, regexp: 'Host=app-postgres', replace: 'Host=envprod-db.project.net' }
+
+      ignore_errors: yes
+
+    - name: Copy appsettings configs
+      copy:
+        src: "/app/{{ item }}/bin/appsettings.json"
+        dest: "/home/dotnetapp/ProjectName.{{ item }}/appsettings.json"
+        remote_src: yes
+      loop:
+        - app1
+        - app2
+        - app3
+        - app4
+
+    - name: Copy appsettings.Production configs
+      copy:
+        src: "/app/{{ item }}/bin/appsettings.Production.json"
+        dest: "/home/dotnetapp/ProjectName.{{ item }}/appsettings.Production.json"
+        remote_src: yes
+      loop:
+        - app1
+        - app2
+        - app3
+        - app4
+
+    - name: Copy production.env configs
+      copy:
+        src: "/app/{{ item }}/bin/{{ item.lower() }}.production.env"
+        dest: "/etc/project/projectname/{{ item.lower() }}.env"
+        remote_src: yes
+      loop:
+        - app1
+        - app2
+        - app3
+        - app4
+
+    - name: Copy daemon configs
+      copy:
+        src: "/app/{{ item }}/bin/project-name-{{ item }}.service"
+        dest: "/etc/systemd/system/project-name-{{ item }}.service"
+        remote_src: yes
+      loop:
+        - app1
+        - app2
+        - app3
+        - app4
+
+#    - name: Add logs directories for services
+#      lineinfile:
+#        path: /etc/systemd/system/project-name-{{ item }}.service
+#        insertafter: '^[Service]'
+#        line: |
+#          StandardOutput=file:/var/log/applications/{{ item | lower }}.log
+#          StandardError=file:/var/log/vector/{{ item | lower }}-error.log
+#        state: present
+#      loop:
+#        - app1
+#        - app2
+#        - app3
+#        - app4
+
+    - name: Set ownership for directories
+      file:
+        path: "{{ item.path }}"
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        recurse: yes
+      loop:
+        - { path: /app, owner: deploy, group: deploy }
+        - { path: /etc/project/projectname, owner: deploy, group: deploy }
+        - { path: /home/dotnetapp, owner: dotnetapp, group: dotnetapp }
+
+    - name: Reload daemon configuration
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start a services
+      command: systemctl enable --now project-name-{{ item }}.service
+      loop:
+        - app1
+        - app2
+        - app3
+        - app4
+
+    - name: Enable and start project-name services
+      command: systemctl restart project-name-{{ item }}.service
+      loop:
+        - app1
+        - app2
+        - app3
+        - app4
+
+- name: Deploy frontend
+  hosts: frontend
+  gather_facts: no
+  become: yes
+  become_user: root
+  tasks:
+    - name: Update servers
+      command: dnf makecache
+    - name: Install packages
+      package:
+        name:
+          - vim
+          - tree
+          - bash-completion
+          - telnet
+          - rsync
+        state: present
+    - name: Check file bash-completion in /home/deploy/.bashrc
+      shell: cat /home/deploy/.bashrc | grep -q "Auto-completion"
+      ignore_errors: true
+      register: grep_result
+    - name: Check file bash-completion in /root/.bashrc
+      shell: cat /root/.bashrc | grep -q "Auto-completion"
+      ignore_errors: true
+      register: grep_result
+    - name: Read bash-completion file
+      slurp:
+        src: ../shared_files/bash-completion
+      delegate_to: localhost
+      become_user: ubuntu
+      register: bash_completion_contents
+    - name: Adding auto-completion into /home/deploy/.bashrc
+      lineinfile:
+        path: /home/deploy/.bashrc
+        line: "{{ bash_completion_contents['content'] | b64decode }}"
+      when: grep_result.rc !=0
+    - name: Adding auto-completion into /root/.bashrc
+      lineinfile:
+        path: /root/.bashrc
+        line: "{{ bash_completion_contents['content'] | b64decode }}"
+      when: grep_result.rc !=0
+
+    - name: Stop nginx service
+      systemd:
+        name: nginx
+        state: stopped
+
+    - name: Remove old data
+      command: "rm -rf /usr/share/nginx/html/*"
+      become: true
+
+    - name: Copy files to nginx html directory
+      synchronize:
+        src: "{{ lookup('env', 'PWD') }}/artifacts/static-website/PublicClient/browser/"
+        dest: "/usr/share/nginx/html/"
+        rsync_opts: "--chown=nginx:nginx"
+
+    - name: Copy nginx.conf
+      copy:
+        src: "{{ lookup('env', 'PWD') }}/artifacts/nginx.vmfrontend.conf"
+        dest: "/etc/nginx/nginx.conf"
+        owner: nginx
+        group: nginx
+
+    - name: Replace IP addresses in nginx.conf
+      replace:
+        path: /etc/nginx/nginx.conf
+        regexp: '(proxy_pass http://)10\.10\.110\.11(:\d+/)'
+        replace: '\g<1>10.15.110.11\g<2>'
+
+    - name: Restart nginx
+      command: systemctl restart nginx.service
+
+- name: Delete artifact
+  hosts: localhost
+  gather_facts: no
+  become: true
+  become_user: root
+  tasks:
+    - name: Remove artifacts.zip from localhost
+      command: "rm -rf {{ lookup('env', 'PWD') }}/artifacts.zip"
+
+    - name: Remove extracted artifacts
+      command: "rm -rf {{ lookup('env', 'PWD') }}/artifacts"
