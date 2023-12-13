@@ -1,2 +1,2 @@
-# terraform-applications for the local development.
+# terraform-applications for local development.
 Just four microservices. No cloud.
